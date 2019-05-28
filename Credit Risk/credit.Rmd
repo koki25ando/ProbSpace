@@ -111,6 +111,49 @@ outliers
 
 1のEDA (支払い不履行の人の特徴を見つけ出す。)
 
+```{r}
+# feature selection
+head(credit)
+```
+
+```{r}
+# feature selection
+nth_list = list()
+accuracy_list = list()
+tic()
+for (i in 2:10){
+    nth_list[[i]] = paste0("trial_", i)
+    train = credit[!is.na(credit$Y),]
+    train = train[,-i]
+    print(i)
+    ranger_model = ranger(Y ~ .,
+                      data=select(train, -ID), num.trees = 500,
+                      respect.unordered.factors = "order")
+    train$pred = predict(ranger_model, select(train, -ID, -Y))$predictions
+    train$pred = ifelse(train$pred > .5, 1, 0)
+    accuracy_list[[i]] = confusionMatrix(as.factor(train$Y), as.factor(train$pred))$overall[1]
+}
+toc()
+```
+
+```{r}
+accuracy_table = data.frame(trial = do.call(rbind, nth_list), Accuracy = do.call(rbind, accuracy_list))
+accuracy_table %>% 
+    ggplot(aes(trial, Accuracy, label = Accuracy)) +
+    geom_bar(stat = "identity", aes(fill = trial)) +
+    geom_label()
+accuracy_table %>% 
+    ggplot(aes(reorder(trial, -Accuracy), Accuracy, label = Accuracy)) +
+    geom_bar(stat = "identity", aes(fill = trial)) +
+    geom_label()
+
+accuracy_table %>% 
+    ggplot(aes(reorder(trial, -Accuracy), Accuracy, color = trial)) +
+    geom_point()
+```
+
+
+
 # gbm modeling
 
 ```{r}
