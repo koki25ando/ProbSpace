@@ -1,0 +1,307 @@
+---
+title: "Credit Risk Modeling"
+author: "Koki Ando"
+date: "4/17/2019"
+output: html_document
+---
+
+[Prob Space](https://prob.space/c/credit_default_risk)
+[kaggle page](https://www.kaggle.com/uciml/default-of-credit-card-clients-dataset/discussion)
+
+
+```{r}
+library(naniar)
+library(tidyverse)
+library(ranger)
+library(randomForest)
+library(caret)
+library(xgboost)
+library(tictoc)
+```
+
+
+```{r}
+test = read.csv("test_data.csv")
+train = read.csv("train_data.csv")
+names(train)[c(1, 25)] = c("ID", "Y")
+test$Y = NA
+credit = rbind(train, test)
+names(credit) = c("ID", "Amount", "Sex", "Education", "Married",  "Age", "Past9",  "Past8",  "Past7", "Past6",  "Past5", "Past4", "Bill9", "Bill8", "Bill7", "Bill6", "Bill5", "Bill4", "Pre9", "Pre8", "Pre7", "Pre6", "Pre5", "Pre4", "Y")
+credit = credit %>% 
+  mutate(Total_Bill = Bill9+Bill8+Bill7+Bill6+Bill5+Bill4,
+         Total_Pre = Pre9+Pre8+ Pre7+Pre6 +Pre5+Pre4)
+credit = credit %>% 
+  mutate(Bill_changed9 = (Bill9-Bill8)/Bill8,
+         Bill_changed8 = (Bill8-Bill7)/Bill7,
+         Bill_changed7 = (Bill7-Bill6)/Bill6,
+         Bill_changed6 = (Bill6-Bill5)/Bill5,
+         Bill_changed5 = (Bill5-Bill4)/Bill4)
+credit[is.na(credit$Bill_changed9), ]$Bill_changed9 = 0
+credit[is.na(credit$Bill_changed8), ]$Bill_changed8 = 0
+credit[is.na(credit$Bill_changed7), ]$Bill_changed7 = 0
+credit[is.na(credit$Bill_changed6), ]$Bill_changed6 = 0
+credit[is.na(credit$Bill_changed5), ]$Bill_changed5 = 0
+credit[is.infinite(credit$Bill_changed9), ]$Bill_changed9 = 0
+credit[is.infinite(credit$Bill_changed8), ]$Bill_changed8 = 0
+credit[is.infinite(credit$Bill_changed7), ]$Bill_changed7 = 0
+credit[is.infinite(credit$Bill_changed6), ]$Bill_changed6 = 0
+credit[is.infinite(credit$Bill_changed5), ]$Bill_changed5 = 0
+
+credit = credit %>% 
+  mutate(change_ave = (Bill_changed9+Bill_changed8+Bill_changed7+Bill_changed6+Bill_changed5)/5) %>% 
+  select(-contains("Bill_changed"))
+credit = credit %>% 
+  mutate(final_change = (Bill9-Bill8)/Bill8)
+credit[is.na(credit$final_change),]$final_change = 0
+credit[is.infinite(credit$final_change),]$final_change = 0
+# final change
+credit[which(credit$final_change == -33598),]$final_change = -5.254125
+credit[which(credit$final_change == max(credit$final_change)),]$final_change = -5.254125
+credit[which(credit$final_change == max(credit$final_change)),]$final_change = -5.254125
+# ave change
+credit[which(credit$change_ave == min(credit$change_ave)),]$change_ave = -5.457273
+credit[which(credit$change_ave == min(credit$change_ave)),]$change_ave = -5.457273
+credit = credit %>% 
+  mutate(Pay9 = ifelse(Past9 == -2, 1, 0), 
+         Pay8 = ifelse(Past8 == -2, 1, 0), 
+         Pay7 = ifelse(Past7 == -2, 1, 0),
+         Pay6 = ifelse(Past6 == -2, 1, 0),
+         notpaid = Pay9+Pay8+Pay7+Pay6)
+credit = credit %>% 
+  mutate(Young_married = ifelse(Age < 26 & Married == 1, 1, 0))
+'%!in%' <- function(x,y)!('%in%'(x,y))
+credit = credit %>% 
+  mutate(low_edu = ifelse(Education %in% c(3,4), 1, 0))
+credit = credit %>% 
+  mutate(high_edu = ifelse(Education == 1, 1, 0))
+credit = credit %>% 
+  mutate(retired = ifelse(Age >= 60, 1, 0))
+credit = credit %>% 
+  mutate(age_bin = cut(Age, breaks = seq(20, 80, by = 10)))
+credit = credit %>% 
+  mutate(Amount_bin = ntile(Amount, 5))
+processed_var = preProcess(select(credit, Total_Bill), method = "YeoJohnson")
+credit = predict(processed_var, credit)
+processed_var = preProcess(select(credit, Total_Pre), method = "YeoJohnson")
+credit = predict(processed_var, credit)
+processed_var = preProcess(select(credit, Amount), method = "YeoJohnson")
+credit = predict(processed_var, credit)
+credit = credit %>% 
+  mutate(age_bin_5 = cut(Age, breaks = seq(20, 80, by = 5)))
+credit = credit %>% 
+  mutate(youg_low_edu = ifelse(Age < 28 & low_edu == 1, 1, 0))
+credit[which(credit$Bill4 == -339603),]$Bill4 = 18129
+credit[which(credit$Bill7 == 1664089),]$Bill7 = 20330
+credit[which(credit$Bill4 == -94625),]$Bill4 = 18131.5
+credit[which(credit$Bill5 == 927171),]$Bill5 = 18104.5
+```
+
+1のEDA (支払い不履行の人の特徴を見つけ出す。)
+
+
+```{r fig.width = 8}
+credit %>% 
+  select(contains("Bill"), -Total_Bill) %>% 
+  gather(key, value) %>% 
+  ggplot(aes(key, value, fill = key)) +
+  geom_boxplot()
+```
+
+outliers
+
+1のEDA (支払い不履行の人の特徴を見つけ出す。)
+
+# gbm modeling
+
+```{r}
+tic()
+train = credit[!is.na(credit$Y),]
+train$Y = factor(train$Y)
+fitControl <- trainControl(method = "repeatedcv", number = 3, repeats = 5)
+gbm_model = train(Y ~ .,
+                  data = select(train, -ID),
+                  method = "gbm", 
+                  trControl = fitControl, verbose = FALSE)
+# plot(gbm_model)
+train$pred = predict(gbm_model, select(train, -Y, -ID))
+confusionMatrix(train$Y, train$pred)
+toc()
+```
+
+
+# cv xgboost modeling and evaluation
+
+```{r}
+tic()
+train = credit[!is.na(credit$Y),]
+set.seed(123)
+train_index = sample(train$ID, nrow(train)*.75)
+cv_train = filter(train, ID %in% train_index)
+cv_test = filter(train, ID %!in% train_index)
+
+cv <- xgb.cv(data = as.matrix(select(cv_train, -ID, -Y)), 
+            label = cv_train$Y,
+            nrounds = 100,
+            nfold = 5,
+            objective = "reg:linear",
+            eta = .3,
+            max_depth = 6,
+            early_stopping_rounds = 10,
+            verbose = 0
+)
+model_xgb <- xgboost(data = as.matrix(select(cv_train, -ID, -Y)), 
+                     label = cv_train$Y,
+                     nrounds = cv$best_iteration,
+                      objective = "reg:linear",
+                      eta = .3,
+                      depth = 6
+                     )
+cv_test$pred = predict(model_xgb, as.matrix(select(cv_test, -ID, -Y)))
+cv_test$pred = ifelse(cv_test$pred > .5, 1, 0)
+confusionMatrix(as.factor(cv_test$Y), as.factor(cv_test$pred))$overall[1]
+cv_test %>%
+  mutate(error = pred - Y) %>%
+  summarise(xgb_rmse = sqrt(mean(error^2)))
+toc()
+```
+
+2: 0.8195556, 0.4247875
+2: 0.8228148, 0.4209337 (9.852 sec elapsed)
+
+# xgboost model
+
+```{r}
+credit_dummy = dummyVars(~., data = credit)
+credit = as.data.frame(predict(credit_dummy, credit))
+test = credit[is.na(credit$Y),] %>% 
+  select(-Y)
+train = credit[!is.na(credit$Y),]
+cv <- xgb.cv(data = as.matrix(select(train, -ID, -Y)), 
+            label = train$Y,
+            nrounds = 100,
+            nfold = 5,
+            objective = "reg:linear",
+            eta = .3,
+            max_depth = 6,
+            early_stopping_rounds = 10,
+            verbose = 0
+)
+model_xgb <- xgboost(data = as.matrix(select(train, -ID, -Y)), 
+                     label = train$Y,
+                     nrounds = cv$best_iteration,
+                      objective = "reg:linear",
+                      eta = .3,
+                      depth = 6,
+                      verbose = 0
+)
+train$pred = predict(model_xgb, as.matrix(select(train, -Y, -ID)))
+train$pred = ifelse(train$pred > .5, 1, 0)
+confusionMatrix(as.factor(train$Y), as.factor(train$pred))$overall[1]
+train %>%
+  mutate(error = pred - Y) %>%
+  summarise(xgb_rmse = sqrt(mean(error^2)))
+```
+
+1: 0.8397037, 0.4003702 [0.827] 117/283
+
+## xgboost submission
+
+```{r}
+test$Y = predict(model_xgb, as.matrix(select(test, -ID)))
+test$Y = ifelse(test$Y > .5, 1, 0)
+submission = select(test, ID, Y)
+write.csv(submission, "submission.csv", row.names = F)
+```
+
+
+
+
+# Random forest model
+
+```{r}
+tic()
+test = credit[is.na(credit$Y),] %>% 
+  select(-Y)
+train = credit[!is.na(credit$Y),]
+rf_model = randomForest(Y~., data = select(train, -ID))
+train$pred = predict(rf_model, select(train, -ID, -Y))
+train$pred = ifelse(train$pred > .5, 1, 0)
+confusionMatrix(as.factor(train$Y), as.factor(train$pred))$overall[1]
+toc()
+```
+
+1: 0.9902963, 0.09850738 [0.827] 119/282
+2: 0.9905556, 0.09718253
+3: 0.9948889, 0.07149204 [0.827] 117/282
+4: 0.9955926 
+5: 0.9962222 (681.673 sec elapsed)
+
+## Hyperparameter Tuning using caret
+
+```{r}
+tic()
+test = credit[is.na(credit$Y),] %>% 
+  select(-Y)
+train = credit[!is.na(credit$Y),]
+fitControl = trainControl(method = "repeatedcv", 
+                          number = 3, repeats = 5)
+rndomForest_model = train(
+  Y ~ .,
+  data = select(train, -ID),
+  method = "rf", trControl = fitControl, verbose = FALSE
+)
+train$pred = predict(rndomForest_model, select(train, -ID, -Y))
+train$pred = ifelse(train$pred > .5, 1, 0)
+confusionMatrix(as.factor(train$Y), as.factor(train$pred))$overall[1]
+toc()
+```
+
+
+## random forest submission
+
+```{r}
+test$Y = predict(rf_model, select(test, -ID))
+test$Y = ifelse(test$Y > .5, 1, 0)
+submission = select(test, ID, Y)
+write.csv(submission, "submission.csv", row.names = F)
+```
+
+# ranger model
+
+```{r}
+tic()
+test = credit[is.na(credit$Y),] %>% 
+  select(-Y)
+train = credit[!is.na(credit$Y),]
+ranger_model = ranger(Y ~ .,
+                      data=select(train, -ID), num.trees = 500,
+                      respect.unordered.factors = "order")
+train$pred = predict(ranger_model, select(train, -ID, -Y))$predictions
+train$pred = ifelse(train$pred > .5, 1, 0)
+confusionMatrix(as.factor(train$Y), as.factor(train$pred))$overall[1]
+# train %>% 
+#   mutate(error = pred-Y) %>% 
+#   summarise(RMSE = sqrt(mean(error^2)))
+toc()
+```
+
+1: 0.9902963, 0.09850738 [0.827] 119/282
+2: 0.9905556, 0.09718253
+3: 0.9948889, 0.07149204 [0.827] 117/282
+6: 0.9914444 (44.135 sec elapsed)
+7: 0.9918148
+8: 0.9922593 
+9: 0.9926667
+10: 0.9928889
+11: 0.9927407
+12: 0.9932593
+
+## ragner submission
+
+```{r}
+test$Y = predict(ranger_model, select(test, -ID))$predictions
+test$Y = ifelse(test$Y > .5, 1, 0)
+submission = select(test, ID, Y)
+write.csv(submission, "submission.csv", row.names = F)
+```
+
