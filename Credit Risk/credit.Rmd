@@ -78,15 +78,18 @@ credit = credit %>%
   mutate(retired = ifelse(Age >= 60, 1, 0))
 credit = credit %>% 
   mutate(age_bin = cut(Age, breaks = seq(20, 80, by = 10)))
-credit = credit %>% 
-  mutate(Amount_bin = ntile(Amount, 5))
 # Normalization
 processed_var = preProcess(select(credit, Total_Bill), method = "YeoJohnson")
 credit = predict(processed_var, credit)
 processed_var = preProcess(select(credit, Total_Pre), method = "YeoJohnson")
 credit = predict(processed_var, credit)
+
+# Amount ----------------------------
+credit = credit %>%
+  mutate(Amount_bin = ntile(Amount, 5))
 processed_var = preProcess(select(credit, Amount), method = "YeoJohnson")
 credit = predict(processed_var, credit)
+# ----------------------------------------------
 credit = credit %>% 
   mutate(age_bin_5 = cut(Age, breaks = seq(20, 80, by = 5)))
 credit = credit %>% 
@@ -99,77 +102,64 @@ processed_var = preProcess(select(credit, contains("Bill"), -Total_Bill), method
 credit = predict(processed_var, credit)
 credit = credit %>% 
   select(-contains("Pay"))
+credit = credit %>% 
+  mutate(total_past4 = ifelse(Past4 > 0, Past4, 0),
+         total_past5 = ifelse(Past5 > 0, Past5, 0),
+         total_past6 = ifelse(Past6 > 0, Past6, 0),
+         total_past7 = ifelse(Past7 > 0, Past7, 0),
+         past_count4_to_7 = total_past4+total_past5+total_past6+total_past7) %>% 
+  select(-contains("total_past"))
 ```
 
+upsampling
+
+ステップの検証
+手法の論文検証
 1のEDA (支払い不履行の人の特徴を見つけ出す。)
 
-
-```{r fig.width = 8}
+```{r fig.width = 12, fig.height=4}
 credit %>% 
-  select(contains("Bill"), -Total_Bill) %>% 
-  gather(key, value) %>% 
-  ggplot(aes(key, value, fill = key)) +
+  select(-c(Sex, Education, Married, ID, Young_married, Amount_bin, retired, notpaid), -contains("Past"), -contains("edu")) %>% 
+  select_if(is.numeric) %>% 
+  select(Age, Amount, Y) %>% 
+  gather(key, value, -Y) %>% 
+  ggplot(aes(factor(Y), value, fill = factor(Y))) +
   geom_boxplot() +
   facet_wrap(~key, scales = "free")
 ```
 
+
 ```{r}
-nth_list = list()
-accuracy_list = list()
-accuracy_list2 = list()
-accuracy_list3 = list()
-accuracy_list4 = list()
-accuracy_list5 = list()
-accuracy_list6 = list()
+boxplot(credit$Amount)
+max(credit$Amount)
+median(credit$Amount)
+credit[which(credit$Amount == max(credit$Amount)), ]$Amount 
+
+credit %>% 
+  filter(Y == 0) %>% 
+  summarise(mean(Amount), median(Amount))
 ```
 
 
-```{r}
-# feature selection
-tic()
-for (i in c(2:24, 26:37)){
-    nth_list[[i]] = paste0("trial_", i)
-    train = credit[!is.na(credit$Y),]
-    train = train[,-i]
-    print(i)
-    ranger_model = ranger(Y ~ .,
-                      data=select(train, -ID), num.trees = 500,
-                      respect.unordered.factors = "order")
-    train$pred = predict(ranger_model, select(train, -ID, -Y))$predictions
-    train$pred = ifelse(train$pred > .5, 1, 0)
-    accuracy_list6[[i]] = confusionMatrix(as.factor(train$Y), as.factor(train$pred))$overall[1]
-}
-toc()
-```
-
-```{r}
-nth_list[[1]] = NULL
-accuracy_list[[25]] = NA
-accuracy_list2[[25]] = NA
-accuracy_list3[[25]] = NA
-accuracy_list4[[25]] = NA
-accuracy_list5[[25]] = NA
-accuracy_list6[[25]] = NA
-accuracy_table = data.frame(trial = do.call(rbind, nth_list), Accuracy = do.call(rbind, accuracy_list), Accuracy2 = do.call(rbind, accuracy_list2),
-                            Accuracy3 = do.call(rbind, accuracy_list3), Accuracy4 = do.call(rbind, accuracy_list4))
-```
+##### Feature selection
 
 ```{r fig.width=8, fig.height=6}
-accuracy_table %>%
+result = read.csv("accuracy_table.csv")
+result$trial = names(credit)[c(2:37)]
+result %>%
   na.omit() %>% 
   gather(key, value, -trial) %>% 
   ggplot() +
   geom_boxplot(aes(reorder(trial, -value), value, fill = trial)) +
   coord_flip()
-accuracy_table %>%
+result %>%
   na.omit() %>% 
   mutate(ave_accuracy = (Accuracy+Accuracy.1+Accuracy.2+Accuracy.3)/4) %>% 
   select(trial, ave_accuracy) %>% 
   arrange(ave_accuracy)
-getwd()
 ```
 
-important features
+### important features
 
 ```{r}
 credit[, c(2:6, 36:37)] %>% 
@@ -179,26 +169,7 @@ credit[, c(2:6, 36:37)] %>%
 amount, sex, education, married, age
 
 
-meaningless features
-
-```{r}
-credit[, c(8:12, 17, 31, 34)] %>% 
-  head
-```
-
-past, youth*married, retired, Bill5
-
-
-feature selection
-submission
-ステップの検証
-手法の論文検証
-
-stacked ratio change
-
-
-1のEDA (支払い不履行の人の特徴を見つけ出す。)
-
+### meaningless features
 # gbm modeling
 
 ```{r}
@@ -323,6 +294,8 @@ toc()
 3: 0.9948889, 0.07149204 [0.827] 117/282
 4: 0.9955926 
 5: 0.9962222 (681.673 sec elapsed)
+6: 0.996963  (1891.157 sec elapsed) [0.829] 105/285
+7: 
 
 ## Hyperparameter Tuning using caret
 
@@ -383,7 +356,8 @@ toc()
 10: 0.9928889
 11: 0.9927407
 12: 0.9932593 
-13: 0.9938148 (46.617 sec elapsed)
+13: 0.9938148 [0.829] 105/285 (46.617 sec elapsed)
+14: 0.9935556 
 
 ## ragner submission
 
@@ -393,4 +367,15 @@ test$Y = ifelse(test$Y > .5, 1, 0)
 submission = select(test, ID, Y)
 write.csv(submission, "submission.csv", row.names = F)
 ```
+
+
+
+
+
+# Model Stacking
+
+0.996963, 0.829 randomForest
+0.8382222, 0.826 xgboost
+0.9935556, 0.822 ranger
+
 
