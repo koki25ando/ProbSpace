@@ -80,6 +80,7 @@ credit = credit %>%
   mutate(age_bin = cut(Age, breaks = seq(20, 80, by = 10)))
 credit = credit %>% 
   mutate(Amount_bin = ntile(Amount, 5))
+# Normalization
 processed_var = preProcess(select(credit, Total_Bill), method = "YeoJohnson")
 credit = predict(processed_var, credit)
 processed_var = preProcess(select(credit, Total_Pre), method = "YeoJohnson")
@@ -94,6 +95,10 @@ credit[which(credit$Bill4 == -339603),]$Bill4 = 18129
 credit[which(credit$Bill7 == 1664089),]$Bill7 = 20330
 credit[which(credit$Bill4 == -94625),]$Bill4 = 18131.5
 credit[which(credit$Bill5 == 927171),]$Bill5 = 18104.5
+processed_var = preProcess(select(credit, contains("Bill"), -Total_Bill), method = "YeoJohnson")
+credit = predict(processed_var, credit)
+credit = credit %>% 
+  select(-contains("Pay"))
 ```
 
 1のEDA (支払い不履行の人の特徴を見つけ出す。)
@@ -104,24 +109,25 @@ credit %>%
   select(contains("Bill"), -Total_Bill) %>% 
   gather(key, value) %>% 
   ggplot(aes(key, value, fill = key)) +
-  geom_boxplot()
-```
-
-outliers
-
-1のEDA (支払い不履行の人の特徴を見つけ出す。)
-
-```{r}
-# feature selection
-head(credit)
+  geom_boxplot() +
+  facet_wrap(~key, scales = "free")
 ```
 
 ```{r}
-# feature selection
 nth_list = list()
 accuracy_list = list()
+accuracy_list2 = list()
+accuracy_list3 = list()
+accuracy_list4 = list()
+accuracy_list5 = list()
+accuracy_list6 = list()
+```
+
+
+```{r}
+# feature selection
 tic()
-for (i in 2:10){
+for (i in c(2:24, 26:37)){
     nth_list[[i]] = paste0("trial_", i)
     train = credit[!is.na(credit$Y),]
     train = train[,-i]
@@ -131,28 +137,67 @@ for (i in 2:10){
                       respect.unordered.factors = "order")
     train$pred = predict(ranger_model, select(train, -ID, -Y))$predictions
     train$pred = ifelse(train$pred > .5, 1, 0)
-    accuracy_list[[i]] = confusionMatrix(as.factor(train$Y), as.factor(train$pred))$overall[1]
+    accuracy_list6[[i]] = confusionMatrix(as.factor(train$Y), as.factor(train$pred))$overall[1]
 }
 toc()
 ```
 
 ```{r}
-accuracy_table = data.frame(trial = do.call(rbind, nth_list), Accuracy = do.call(rbind, accuracy_list))
-accuracy_table %>% 
-    ggplot(aes(trial, Accuracy, label = Accuracy)) +
-    geom_bar(stat = "identity", aes(fill = trial)) +
-    geom_label()
-accuracy_table %>% 
-    ggplot(aes(reorder(trial, -Accuracy), Accuracy, label = Accuracy)) +
-    geom_bar(stat = "identity", aes(fill = trial)) +
-    geom_label()
-
-accuracy_table %>% 
-    ggplot(aes(reorder(trial, -Accuracy), Accuracy, color = trial)) +
-    geom_point()
+nth_list[[1]] = NULL
+accuracy_list[[25]] = NA
+accuracy_list2[[25]] = NA
+accuracy_list3[[25]] = NA
+accuracy_list4[[25]] = NA
+accuracy_list5[[25]] = NA
+accuracy_list6[[25]] = NA
+accuracy_table = data.frame(trial = do.call(rbind, nth_list), Accuracy = do.call(rbind, accuracy_list), Accuracy2 = do.call(rbind, accuracy_list2),
+                            Accuracy3 = do.call(rbind, accuracy_list3), Accuracy4 = do.call(rbind, accuracy_list4))
 ```
 
+```{r fig.width=8, fig.height=6}
+accuracy_table %>%
+  na.omit() %>% 
+  gather(key, value, -trial) %>% 
+  ggplot() +
+  geom_boxplot(aes(reorder(trial, -value), value, fill = trial)) +
+  coord_flip()
+accuracy_table %>%
+  na.omit() %>% 
+  mutate(ave_accuracy = (Accuracy+Accuracy.1+Accuracy.2+Accuracy.3)/4) %>% 
+  select(trial, ave_accuracy) %>% 
+  arrange(ave_accuracy)
+getwd()
+```
 
+important features
+
+```{r}
+credit[, c(2:6, 36:37)] %>% 
+  head
+```
+
+amount, sex, education, married, age
+
+
+meaningless features
+
+```{r}
+credit[, c(8:12, 17, 31, 34)] %>% 
+  head
+```
+
+past, youth*married, retired, Bill5
+
+
+feature selection
+submission
+ステップの検証
+手法の論文検証
+
+stacked ratio change
+
+
+1のEDA (支払い不履行の人の特徴を見つけ出す。)
 
 # gbm modeling
 
@@ -337,7 +382,8 @@ toc()
 9: 0.9926667
 10: 0.9928889
 11: 0.9927407
-12: 0.9932593
+12: 0.9932593 
+13: 0.9938148 (46.617 sec elapsed)
 
 ## ragner submission
 
